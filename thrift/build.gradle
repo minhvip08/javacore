@@ -1,0 +1,108 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.simi'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Thrift
+    implementation 'org.apache.thrift:libthrift:0.21.0'
+    
+    // javax.annotation for @Generated annotation
+    implementation 'javax.annotation:javax.annotation-api:1.3.2'
+    
+    // Logging
+    implementation 'org.slf4j:slf4j-api:2.0.11'
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.11'
+    
+    // Testing
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Configure Thrift code generation
+sourceSets {
+    main {
+        java {
+            srcDir 'src/main/java'
+            srcDir 'src/main/gen-java'
+        }
+    }
+}
+
+// Task to compile Thrift files (optional - only if thrift command available)
+task compileThrift {
+    doLast {
+        File genDir = file('src/main/gen-java')
+        if (!genDir.exists()) {
+            genDir.mkdirs()
+        }
+        
+        // Check if thrift compiler is available
+        def process = new ProcessBuilder('thrift', '-version').redirectErrorStream(true).start()
+        def isAvailable = process.waitFor() == 0
+        
+        if (!isAvailable) {
+            println "⚠️  Thrift compiler not found in PATH"
+            println "   Skipping Thrift code generation"
+            println "   Install with: brew install thrift (macOS) or download from https://thrift.apache.org/download/"
+            return
+        }
+        
+        println "📦 Compiling Thrift files..."
+        fileTree('thrift').include('*.thrift').each { file ->
+            println "   Processing: ${file.name}"
+            def pb = new ProcessBuilder('thrift', '-gen', 'java', '-out', 'src/main/gen-java', file.absolutePath)
+            pb.directory(project.projectDir)
+            pb.inheritIO()
+            def p = pb.start()
+            def exitCode = p.waitFor()
+            if (exitCode != 0) {
+                throw new GradleException("Thrift compilation failed for ${file.name}")
+            }
+        }
+        println "✓ Thrift compilation complete"
+    }
+}
+
+compileJava.dependsOn compileThrift
+
+// Application plugin configuration
+application {
+    mainClass = 'com.simi.Main'
+}
+
+// Custom run tasks for server and client
+task runServer(type: JavaExec) {
+    group = 'application'
+    description = 'Run the Thrift Calculator Server'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.simi.CalculatorServer'
+}
+
+task runClient(type: JavaExec) {
+    group = 'application'
+    description = 'Run the Thrift Calculator Client'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.simi.CalculatorClient'
+    dependsOn build
+}
+
+task runAsyncClient(type: JavaExec) {
+    group = 'application'
+    description = 'Run the Async Thrift Calculator Client'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.simi.AsyncCalculatorClient'
+    dependsOn build
+}
+
+test {
+    useJUnitPlatform()
+}
