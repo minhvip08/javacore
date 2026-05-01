@@ -1,5 +1,6 @@
-package com.simi;
+package com.simi.blocking;
 
+import com.simi.CalculatorHandler;
 import org.apache.thrift.server.TServer;
 import org.apache.thrift.server.TServer.Args;
 import org.apache.thrift.server.TSimpleServer;

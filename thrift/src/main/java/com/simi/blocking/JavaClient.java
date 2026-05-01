@@ -1,5 +1,6 @@
-package com.simi;
+package com.simi.blocking;
 
+import com.simi.CalculatorHandler;
 import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TProtocol;
