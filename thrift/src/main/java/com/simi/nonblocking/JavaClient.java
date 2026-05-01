@@ -13,7 +13,8 @@ import tutorial.InvalidOperation;
 import tutorial.Operation;
 import tutorial.Work;
 
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 public class JavaClient {
     public static void main(String[] args) {
@@ -31,101 +32,94 @@ public class JavaClient {
         }
     }
 
+    @FunctionalInterface
+    private interface AsyncThriftCall<T> {
+        void call(AsyncMethodCallback<T> callback) throws Exception;
+    }
+
+    private static <T> CompletableFuture<T> asyncCall(AsyncThriftCall<T> call) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        try {
+            call.call(new AsyncMethodCallback<T>() {
+                @Override
+                public void onComplete(T response) {
+                    future.complete(response);
+                }
+
+                @Override
+                public void onError(Exception exception) {
+                    future.completeExceptionally(exception);
+                }
+            });
+        } catch (Exception e) {
+            future.completeExceptionally(e);
+        }
+        return future;
+    }
+
     private static void perform(Calculator.AsyncClient client) throws Exception {
-        CountDownLatch latch = new CountDownLatch(4);
-
         System.out.println("Calling ping");
-        client.ping(new AsyncMethodCallback<Void>() {
-            @Override
-            public void onComplete(Void response) {
-                System.out.println("ping() successful");
-                latch.countDown();
-            }
-
-            @Override
-            public void onError(Exception exception) {
-                System.out.println("ping() failed: " + exception.getMessage());
-                latch.countDown();
-            }
-        });
+        CompletableFuture<Void> pingFuture = asyncCall(client::ping)
+                .thenRun(() -> System.out.println("ping() successful"))
+                .exceptionally(ex -> {
+                    Throwable cause = (ex instanceof CompletionException) ? ex.getCause() : ex;
+                    System.out.println("ping() failed: " + cause.getMessage());
+                    return null;
+                });
 
         System.out.println("Calling add");
-        client.add(1, 1, new AsyncMethodCallback<Integer>() {
-            @Override
-            public void onComplete(Integer response) {
-                System.out.println("1+1=" + response);
-                latch.countDown();
-            }
+        CompletableFuture<Integer> addFuture = asyncCall((AsyncMethodCallback<Integer> callback) -> client.add(1, 1, callback))
+                .thenApply(sum -> {
+                    System.out.println("1+1=" + sum);
+                    return sum;
+                })
+                .exceptionally(ex -> {
+                    Throwable cause = (ex instanceof CompletionException) ? ex.getCause() : ex;
+                    System.out.println("add() failed: " + cause.getMessage());
+                    return null;
+                });
 
-            @Override
-            public void onError(Exception exception) {
-                System.out.println("add() failed: " + exception.getMessage());
-                latch.countDown();
-            }
-        });
+        Work divideWork = new Work();
+        divideWork.op = Operation.DIVIDE;
+        divideWork.num1 = 1;
+        divideWork.num2 = 0;
 
-        Work work = new Work();
-        work.op = Operation.DIVIDE;
-        work.num1 = 1;
-        work.num2 = 0;
-        
         System.out.println("Calling calculate divide by 0");
-        client.calculate(1, work, new AsyncMethodCallback<Integer>() {
-            @Override
-            public void onComplete(Integer response) {
-                System.out.println("Whoa we can divide by 0");
-                latch.countDown();
-            }
+        CompletableFuture<Integer> calcDivideFuture = asyncCall((AsyncMethodCallback<Integer> callback) -> client.calculate(1, divideWork, callback))
+                .thenApply(result -> {
+                    System.out.println("Whoa we can divide by 0");
+                    return result;
+                })
+                .exceptionally(ex -> {
+                    Throwable cause = (ex instanceof CompletionException) ? ex.getCause() : ex;
+                    if (cause instanceof InvalidOperation) {
+                        System.out.println("Invalid operation: " + ((InvalidOperation) cause).why);
+                    } else {
+                        System.out.println("calculate() failed: " + cause.getMessage());
+                    }
+                    return null;
+                });
 
-            @Override
-            public void onError(Exception exception) {
-                if (exception instanceof InvalidOperation) {
-                    System.out.println("Invalid operation: " + ((InvalidOperation) exception).why);
-                } else {
-                    System.out.println("calculate() failed: " + exception.getMessage());
-                }
-                latch.countDown();
-            }
-        });
+        Work subtractWork = new Work();
+        subtractWork.op = Operation.SUBTRACT;
+        subtractWork.num1 = 15;
+        subtractWork.num2 = 10;
 
-        work.op = Operation.SUBTRACT;
-        work.num1 = 15;
-        work.num2 = 10;
-        
         System.out.println("Calling calculate subtract");
-        client.calculate(1, work, new AsyncMethodCallback<Integer>() {
-            @Override
-            public void onComplete(Integer response) {
-                System.out.println("15-10=" + response);
-                
-                try {
-                    client.getStruct(1, new AsyncMethodCallback<SharedStruct>() {
-                        @Override
-                        public void onComplete(SharedStruct log) {
-                            System.out.println("Check log: " + log.value);
-                            latch.countDown();
-                        }
-                        
-                        @Override
-                        public void onError(Exception exception) {
-                            System.out.println("getStruct() failed: " + exception.getMessage());
-                            latch.countDown();
-                        }
-                    });
-                } catch (TException e) {
-                    e.printStackTrace();
-                    latch.countDown();
-                }
-            }
+        CompletableFuture<Void> calcSubtractFuture = asyncCall((AsyncMethodCallback<Integer> callback) -> client.calculate(1, subtractWork, callback))
+                .thenApply(result -> {
+                    System.out.println("15-10=" + result);
+                    return result;
+                })
+                .thenCompose(result -> asyncCall((AsyncMethodCallback<SharedStruct> callback) -> client.getStruct(1, callback)))
+                .thenAccept(log -> System.out.println("Check log: " + log.value))
+                .exceptionally(ex -> {
+                    Throwable cause = (ex instanceof CompletionException) ? ex.getCause() : ex;
+                    System.out.println("calculate() subtract failed: " + cause.getMessage());
+                    return null;
+                });
 
-            @Override
-            public void onError(Exception exception) {
-                System.out.println("calculate() subtract failed: " + exception.getMessage());
-                latch.countDown();
-            }
-        });
-
-        latch.await();
+        CompletableFuture.allOf(pingFuture, addFuture, calcDivideFuture, calcSubtractFuture).join();
         System.out.println("Finished all async operations");
         System.exit(0);
     }
